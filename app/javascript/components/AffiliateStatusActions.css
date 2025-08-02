@@ -1,0 +1,45 @@
+/* Status badges */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem 0.625rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 500;
+}
+
+.status-badge.pending {
+  background-color: #fef9c3;
+  color: #92400e;
+}
+
+.status-badge.approved {
+  background-color: #dcfce7;
+  color: #166534;
+}
+
+.status-badge.denied,
+.status-badge.revoked {
+  background-color: #fee2e2;
+  color: #991b1b;
+}
+
+/* Actions container */
+.affiliate-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Responsive table adjustments */
+@media (max-width: 768px) {
+  .affiliate-actions {
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+  
+  .affiliate-actions .btn {
+    padding: 0.25rem;
+  }
+}

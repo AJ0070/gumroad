@@ -33,6 +33,7 @@ class AffiliatedProductsPresenter
       pagination, records = pagy_arel(affiliated_products, page:, limit: PER_PAGE)
       records = records.map do |product|
         revenue = product.revenue || 0
+        affiliate_link = AffiliateLink.find_by(affiliate_id: product.affiliate_id, link_id: product.link_id)
         {
           product_name: product.name,
           url: product.affiliate_type.constantize.new(id: product.affiliate_id).referral_url_for_product(product),
@@ -40,7 +41,10 @@ class AffiliatedProductsPresenter
           revenue:,
           humanized_revenue: MoneyFormatter.format(revenue, :usd, no_cents_if_whole: true, symbol: true),
           sales_count: product.sales_count,
-          affiliate_type: product.affiliate_type.underscore
+          affiliate_type: product.affiliate_type.underscore,
+          affiliate_link_id: affiliate_link&.id,
+          status: affiliate_link&.status || 'approved', # Default to 'approved' for backward compatibility
+          status_updated_at: affiliate_link&.status_updated_at
         }
       end
       { pagination: PagyPresenter.new(pagination).props, affiliated_products: records }

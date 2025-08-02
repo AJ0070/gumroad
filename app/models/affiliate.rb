@@ -16,8 +16,9 @@ class Affiliate < ApplicationRecord
   belongs_to :affiliate_user, class_name: "User"
   has_many :affiliate_credits
   has_many :purchases
-  has_many :product_affiliates, autosave: true
-  has_many :products, through: :product_affiliates
+  has_many :affiliate_links, dependent: :destroy
+  has_many :product_affiliates, autosave: true, class_name: 'AffiliateLink'
+  has_many :products, through: :product_affiliates, source: :link
   has_many :purchases_that_count_towards_volume, -> { counts_towards_volume }, class_name: "Purchase"
 
   scope :created_after,   ->(start_at) { where("affiliates.created_at > ?", start_at) if start_at.present? }
@@ -50,7 +51,14 @@ class Affiliate < ApplicationRecord
     affiliates_relation
   end
   # Logic in `valid_for_product` scope should match logic in `eligible_for_purchase_credit?` methods
-  scope :valid_for_product, ->(product) { for_product(product).alive.joins(:affiliate_user).merge(User.not_suspended) }
+  scope :valid_for_product, ->(product) { 
+    for_product(product)
+      .alive
+      .joins(:affiliate_user)
+      .joins(:affiliate_links)
+      .where(affiliate_links: { status: [AffiliateLink::APPROVED, AffiliateLink::PENDING] })
+      .merge(User.not_suspended) 
+  }
 
   validate :eligible_for_stripe_payments
   def enabled_products

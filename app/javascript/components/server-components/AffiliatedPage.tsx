@@ -23,6 +23,7 @@ import { Sort, useSortingTableDriver } from "$app/components/useSortingTableDriv
 import { WithTooltip } from "$app/components/WithTooltip";
 
 import { useGlobalEventListener } from "../useGlobalEventListener";
+import { AffiliateStatusActions } from "../AffiliateStatusActions";
 
 import placeholder from "$assets/images/placeholders/affiliated.png";
 
@@ -34,6 +35,9 @@ export type AffiliatedProduct = {
   humanized_revenue: string;
   sales_count: number;
   affiliate_type: "direct_affiliate" | "global_affiliate";
+  affiliate_link_id?: number;
+  status?: 'pending' | 'approved' | 'denied' | 'revoked';
+  status_updated_at?: string;
 };
 
 type Stats = {
@@ -96,11 +100,33 @@ type AffiliatedProductsTableProps = {
 export type SortKey = "product_name" | "sales_count" | "commission" | "revenue";
 
 const AffiliatedProductsTable = ({
-  affiliatedProducts,
+  affiliatedProducts: initialProducts,
   pagination,
   loadAffiliatedProducts,
   isLoading,
 }: AffiliatedProductsTableProps) => {
+  const [products, setProducts] = React.useState(initialProducts);
+  
+  // Update local products when props change
+  React.useEffect(() => {
+    setProducts(initialProducts);
+  }, [initialProducts]);
+  
+  // Handle status change for a product
+  const handleStatusChange = (affiliateLinkId: number, newStatus: 'pending' | 'approved' | 'denied' | 'revoked') => {
+    setProducts(prevProducts => 
+      prevProducts.map(product => {
+        if (product.affiliate_link_id === affiliateLinkId) {
+          return {
+            ...product,
+            status: newStatus,
+            status_updated_at: new Date().toISOString()
+          };
+        }
+        return product;
+      })
+    );
+  };
   const [sort, setSort] = React.useState<Sort<SortKey> | null>(null);
   const thProps = useSortingTableDriver<SortKey>(sort, setSort);
   const userAgentInfo = useUserAgentInfo();
@@ -127,12 +153,13 @@ const AffiliatedProductsTable = ({
             <th {...thProps("revenue")} title="Sort by Revenue">
               Revenue
             </th>
-            <th />
+            <th>Status</th>
+            <th>Actions</th>
           </tr>
         </thead>
 
         <tbody>
-          {affiliatedProducts.map((affiliatedProduct) => (
+          {products.map((affiliatedProduct) => (
             <tr key={affiliatedProduct.url}>
               <td>
                 <a href={affiliatedProduct.url} title={affiliatedProduct.url} target="_blank" rel="noreferrer">
@@ -156,14 +183,35 @@ const AffiliatedProductsTable = ({
                 {affiliatedProduct.humanized_revenue}
               </td>
 
-              <td>
-                <div className="actions">
-                  <CopyToClipboard tooltipPosition="bottom" copyTooltip="Copy link" text={affiliatedProduct.url}>
-                    <Button>
-                      <Icon name="link" />
-                      Copy link
+              <td data-label="Status" style={{ whiteSpace: 'nowrap' }}>
+                <span className={`status-badge ${affiliatedProduct.status || 'approved'}`}>
+                  {affiliatedProduct.status ? affiliatedProduct.status.charAt(0).toUpperCase() + affiliatedProduct.status.slice(1) : 'Approved'}
+                </span>
+              </td>
+
+              <td data-label="Actions">
+                <div className="flex items-center space-x-2">
+                  <CopyToClipboard 
+                    tooltipPosition="bottom" 
+                    copyTooltip="Copy link" 
+                    text={affiliatedProduct.url}
+                  >
+                    <Button size="sm" variant="ghost" className="p-1">
+                      <Icon name="link" className="w-4 h-4" />
                     </Button>
                   </CopyToClipboard>
+                  
+                  {affiliatedProduct.affiliate_link_id !== undefined && (
+                    <AffiliateStatusActions
+                      affiliateLinkId={affiliatedProduct.affiliate_link_id}
+                      currentStatus={affiliatedProduct.status || 'approved'}
+                      onStatusChange={(newStatus) => {
+                        if (affiliatedProduct.affiliate_link_id !== undefined) {
+                          handleStatusChange(affiliatedProduct.affiliate_link_id, newStatus)
+                        }
+                      }}
+                    />
+                  )}
                 </div>
               </td>
             </tr>

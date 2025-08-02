@@ -379,12 +379,17 @@ Rails.application.routes.draw do
       end
     end
     resources :affiliates, only: [:index] do
-      member do
-        get :subscribe_posts
-        get :unsubscribe_posts
-      end
       collection do
         get :export
+        post :subscribe_posts, to: "affiliates#subscribe_posts"
+        post :unsubscribe_posts, to: "affiliates#unsubscribe_posts"
+      end
+    end
+    resources :affiliate_links, only: [] do
+      member do
+        patch :approve
+        patch :deny
+        patch :revoke
       end
     end
     resources :collaborators, only: [:index]
