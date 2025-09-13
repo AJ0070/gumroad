@@ -86,6 +86,7 @@ describe("Product Page - Shipping with offer codes", type: :system, js: true, sh
       visit "#{@product.long_url}/#{@offer_code.code}"
       add_to_cart(@product, offer_code: @offer_code)
       check_out(@product, offer_code: @offer_code.code, is_free: true, should_verify_address: true)
+      expect(page).to have_alert("Your purchase was successful!")
       expect(Purchase.last.price_cents).to eq(0)
       expect(Purchase.last.shipping_cents).to eq(0)
     end
