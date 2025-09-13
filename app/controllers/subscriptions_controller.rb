@@ -5,10 +5,10 @@ class SubscriptionsController < ApplicationController
   before_action :authenticate_user!, except: PUBLIC_ACTIONS
   after_action :verify_authorized, except: PUBLIC_ACTIONS
 
-  before_action :fetch_subscription, only: %i[unsubscribe_by_seller unsubscribe_by_user magic_link send_magic_link]
+  before_action :fetch_subscription, only: %i[unsubscribe_by_seller unsubscribe_by_user magic_link send_magic_link update_vat_id]
   before_action :hide_layouts, only: [:manage, :magic_link, :send_magic_link]
   before_action :set_noindex_header, only: [:manage]
-  before_action :check_can_manage, only: [:manage, :unsubscribe_by_user]
+  before_action :check_can_manage, only: [:manage, :unsubscribe_by_user, :update_vat_id]
 
   SUBSCRIPTION_COOKIE_EXPIRY = 1.week
 
@@ -54,6 +54,24 @@ class SubscriptionsController < ApplicationController
     CustomerMailer.subscription_magic_link(@subscription.id, email).deliver_later(queue: "critical")
 
     head :no_content
+  end
+
+  def update_vat_id
+    vat_id = params[:vat_id]&.strip
+    
+    service = Subscription::VatIdUpdateService.new(@subscription, vat_id)
+    
+    if service.call
+      render json: { 
+        success: true, 
+        message: "VAT ID updated successfully. Future charges will automatically receive VAT refunds." 
+      }
+    else
+      render json: { 
+        success: false, 
+        errors: service.errors 
+      }, status: :unprocessable_entity
+    end
   end
 
   private

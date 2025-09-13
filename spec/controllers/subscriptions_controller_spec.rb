@@ -42,6 +42,81 @@ describe SubscriptionsController do
   end
 
   context "within consumer area" do
+    describe "PATCH update_vat_id" do
+      before do
+        cookies.encrypted[@subscription.cookie_key] = @subscription.external_id
+      end
+
+      context "with valid VAT ID" do
+        let(:vat_id) { "DE123456789" }
+        let(:service) { instance_double(Subscription::VatIdUpdateService) }
+
+        before do
+          allow(Subscription::VatIdUpdateService).to receive(:new).with(@subscription, vat_id).and_return(service)
+        end
+
+        it "updates VAT ID successfully" do
+          allow(service).to receive(:call).and_return(true)
+
+          patch :update_vat_id, params: { id: @subscription.external_id, vat_id: vat_id }
+
+          expect(response).to be_successful
+          expect(JSON.parse(response.body)).to eq({
+            "success" => true,
+            "message" => "VAT ID updated successfully. Future charges will automatically receive VAT refunds."
+          })
+        end
+
+        it "returns error when service fails" do
+          allow(service).to receive(:call).and_return(false)
+          allow(service).to receive(:errors).and_return(["Invalid VAT ID"])
+
+          patch :update_vat_id, params: { id: @subscription.external_id, vat_id: vat_id }
+
+          expect(response).to have_http_status(:unprocessable_entity)
+          expect(JSON.parse(response.body)).to eq({
+            "success" => false,
+            "errors" => ["Invalid VAT ID"]
+          })
+        end
+      end
+
+      context "with blank VAT ID" do
+        it "handles blank VAT ID" do
+          service = instance_double(Subscription::VatIdUpdateService)
+          allow(Subscription::VatIdUpdateService).to receive(:new).with(@subscription, "").and_return(service)
+          allow(service).to receive(:call).and_return(false)
+          allow(service).to receive(:errors).and_return(["VAT ID is required"])
+
+          patch :update_vat_id, params: { id: @subscription.external_id, vat_id: "" }
+
+          expect(response).to have_http_status(:unprocessable_entity)
+          expect(JSON.parse(response.body)).to eq({
+            "success" => false,
+            "errors" => ["VAT ID is required"]
+          })
+        end
+      end
+
+      context "when subscription is not found" do
+        it "returns 404" do
+          patch :update_vat_id, params: { id: "nonexistent", vat_id: "DE123456789" }
+          expect(response).to have_http_status(:not_found)
+        end
+      end
+
+      context "without proper authentication" do
+        before do
+          cookies.delete(@subscription.cookie_key)
+        end
+
+        it "redirects to magic link page" do
+          patch :update_vat_id, params: { id: @subscription.external_id, vat_id: "DE123456789" }
+          expect(response).to redirect_to(magic_link_subscription_path(@subscription.external_id))
+        end
+      end
+    end
+
     describe "POST unsubscribe_by_user" do
       before do
         cookies.encrypted[@subscription.cookie_key] = @subscription.external_id

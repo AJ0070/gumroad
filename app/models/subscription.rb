@@ -325,6 +325,9 @@ class Subscription < ApplicationRecord
                                       is_recurring_purchase: true,
                                       discover_fee_per_thousand: original_purchase.discover_fee_per_thousand)
     end
+    
+    # Automatically apply VAT refund for recurring subscriptions if VAT ID exists
+    apply_automatic_vat_refund(purchase)
   end
 
   def handle_purchase_failure(purchase)
@@ -934,6 +937,86 @@ class Subscription < ApplicationRecord
       elsif original_purchase.refunds.where("gumroad_tax_cents > 0").where("amount_cents = 0").exists?
         purchase.business_vat_id = original_purchase.refunds.where("gumroad_tax_cents > 0").where("amount_cents = 0").first.business_vat_id
       end
+    end
+
+    def apply_automatic_vat_refund(purchase)
+      return unless purchase.successful?
+      return unless purchase.gumroad_tax_cents > 0
+      return unless has_valid_vat_id?(purchase)
+      
+      # Skip if this is the original subscription purchase (not a recurring charge)
+      return if purchase.is_original_subscription_purchase?
+      
+      begin
+        Rails.logger.info("Applying automatic VAT refund for subscription #{external_id}, purchase #{purchase.external_id}")
+        
+        # Apply VAT refund automatically for recurring subscription charges
+        purchase.refund_gumroad_taxes!(
+          refunding_user_id: nil, # System-initiated refund
+          note: "Automatic VAT refund for recurring subscription with valid VAT ID",
+          business_vat_id: get_business_vat_id_for_purchase(purchase)
+        )
+        
+        Rails.logger.info("Successfully applied automatic VAT refund for subscription #{external_id}, purchase #{purchase.external_id}")
+      rescue => e
+        Rails.logger.error("Failed to apply automatic VAT refund for subscription #{external_id}, purchase #{purchase.external_id}: #{e.message}")
+        # Don't fail the subscription charge if VAT refund fails
+      end
+    end
+
+    def has_valid_vat_id?(purchase)
+      vat_id = get_business_vat_id_for_purchase(purchase)
+      return false if vat_id.blank?
+      
+      # Validate VAT ID based on country
+      country_code = purchase.purchase_sales_tax_info&.country_code
+      return false if country_code.blank?
+      
+      validate_vat_id_for_country(vat_id, country_code)
+    end
+
+    def get_business_vat_id_for_purchase(purchase)
+      purchase.purchase_sales_tax_info&.business_vat_id ||
+        purchase.business_vat_id ||
+        original_purchase.purchase_sales_tax_info&.business_vat_id
+    end
+
+    def validate_vat_id_for_country(vat_id, country_code)
+      case country_code
+      when Compliance::Countries::AUS.alpha2
+        AbnValidationService.new(vat_id).process
+      when Compliance::Countries::SGP.alpha2
+        GstValidationService.new(vat_id).process
+      when Compliance::Countries::CAN.alpha2
+        # For Quebec specifically
+        if original_purchase.purchase_sales_tax_info&.state_code == "QC"
+          QstValidationService.new(vat_id).process
+        else
+          TaxIdValidationService.new(vat_id, country_code).process
+        end
+      when Compliance::Countries::NOR.alpha2
+        MvaValidationService.new(vat_id).process
+      when Compliance::Countries::BHR.alpha2
+        TrnValidationService.new(vat_id).process
+      when Compliance::Countries::KEN.alpha2
+        KraPinValidationService.new(vat_id).process
+      when Compliance::Countries::OMN.alpha2
+        OmanVatNumberValidationService.new(vat_id).process
+      when Compliance::Countries::NGA.alpha2
+        FirsTinValidationService.new(vat_id).process
+      when Compliance::Countries::TZA.alpha2
+        TraTinValidationService.new(vat_id).process
+      else
+        if Compliance::Countries::COUNTRIES_THAT_COLLECT_TAX_ON_ALL_PRODUCTS.include?(country_code) ||
+           Compliance::Countries::COUNTRIES_THAT_COLLECT_TAX_ON_DIGITAL_PRODUCTS_WITH_TAX_ID_PRO_VALIDATION.include?(country_code)
+          TaxIdValidationService.new(vat_id, country_code).process
+        else
+          VatValidationService.new(vat_id).process
+        end
+      end
+    rescue => e
+      Rails.logger.error("VAT ID validation failed for #{vat_id} in country #{country_code}: #{e.message}")
+      false
     end
 
     def schedule_member_cancellation_workflow_jobs
