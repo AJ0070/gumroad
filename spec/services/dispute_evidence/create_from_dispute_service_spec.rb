@@ -97,6 +97,61 @@ describe DisputeEvidence::CreateFromDisputeService, :vcr, :versioning do
     expect(dispute_evidence.access_activity_log).to eq("Sample activity logs")
   end
 
+  context "when product has license key" do
+    let(:license_product) { create(:product, :with_license) }
+    let!(:license_purchase) do
+      create(
+        :purchase,
+        email: "customer@example.com",
+        full_name: "John Example",
+        link: license_product,
+        url_redirect: create(:url_redirect)
+      )
+    end
+    let!(:license) { create(:license, purchase: license_purchase, serial: "LICENSE-KEY-123", uses: 5) }
+
+    before do
+      create(:dispute_formalized, purchase: license_purchase)
+    end
+
+    it "includes license key information in dispute evidence" do
+      allow(DisputeEvidence::GenerateReceiptImageService).to receive(:perform).with(license_purchase).and_return(sample_image)
+      allow(DisputeEvidence::GenerateUncategorizedTextService).to(
+        receive(:perform).with(license_purchase).and_return("Sample uncategorized text")
+      )
+      allow(DisputeEvidence::GenerateAccessActivityLogsService).to(
+        receive(:perform).with(license_purchase).and_return("Sample activity logs")
+      )
+
+      dispute_evidence = DisputeEvidence.create_from_dispute!(license_purchase.dispute)
+
+      expect(dispute_evidence.license_key).to eq("LICENSE-KEY-123")
+      expect(dispute_evidence.license_key_activation_count).to eq(5)
+    end
+
+    context "when no license exists for purchase" do
+      let!(:license_purchase_without_license) do
+        create(
+          :purchase,
+          email: "customer@example.com",
+          full_name: "John Example",
+          link: license_product,
+          url_redirect: create(:url_redirect)
+        )
+      end
+
+      before do
+        create(:dispute_formalized, purchase: license_purchase_without_license)
+        @dispute_evidence = DisputeEvidence.create_from_dispute!(license_purchase_without_license.dispute)
+      end
+
+      it "does not include license key information" do
+        expect(@dispute_evidence.license_key).to be_nil
+        expect(@dispute_evidence.license_key_activation_count).to be_nil
+      end
+    end
+  end
+
   context "when dispute is on a combined charge" do
     let(:purchase) do
       create(

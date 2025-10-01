@@ -123,6 +123,25 @@ class PaypalRestApi
     execute_request
   end
 
+  def get_dispute(dispute_id)
+    @request = new_request(path: "/v1/customer/disputes/#{dispute_id}", verb: "GET")
+    execute_request
+  end
+
+  def appeal_dispute(dispute_id, evidence)
+    @request = new_request(path: "/v1/customer/disputes/#{dispute_id}/appeal", verb: "POST")
+    @request.headers["Prefer"] = "return=representation"
+    @request.body = build_dispute_evidence(evidence)
+    execute_request
+  end
+
+  def provide_evidence_for_dispute(dispute_id, evidence)
+    @request = new_request(path: "/v1/customer/disputes/#{dispute_id}/provide-evidence", verb: "POST")
+    @request.headers["Prefer"] = "return=representation"
+    @request.body = build_dispute_evidence(evidence)
+    execute_request
+  end
+
   def successful_response?(api_response)
     (200...300).include?(api_response.status_code)
   end
@@ -199,6 +218,51 @@ class PaypalRestApi
 
     def money_object(currency:, value:)
       { currency_code: currency.upcase, value: }
+    end
+
+    def build_dispute_evidence(evidence)
+      evidence_hash = {}
+
+      evidence_hash[:evidence_type] = "OTHER" if evidence[:evidence_type].blank?
+      evidence_hash[:evidence_info] = {}
+
+      if evidence[:billing_address].present?
+        evidence_hash[:evidence_info][:billing_address] = evidence[:billing_address]
+      end
+
+      if evidence[:customer_email].present?
+        evidence_hash[:evidence_info][:customer_email] = evidence[:customer_email]
+      end
+
+      if evidence[:customer_name].present?
+        evidence_hash[:evidence_info][:customer_name] = evidence[:customer_name]
+      end
+
+      if evidence[:product_description].present?
+        evidence_hash[:evidence_info][:product_description] = evidence[:product_description]
+      end
+
+      if evidence[:shipping_address].present?
+        evidence_hash[:evidence_info][:shipping_address] = evidence[:shipping_address]
+      end
+
+      if evidence[:shipping_tracking_number].present?
+        evidence_hash[:evidence_info][:tracking_number] = evidence[:shipping_tracking_number]
+      end
+
+      if evidence[:reason_for_winning].present?
+        evidence_hash[:evidence_info][:notes] = evidence[:reason_for_winning]
+      end
+
+      if evidence[:license_key].present?
+        evidence_hash[:evidence_info][:license_key] = evidence[:license_key]
+      end
+
+      if evidence[:license_key_activation_count].present?
+        evidence_hash[:evidence_info][:license_key_activation_count] = evidence[:license_key_activation_count]
+      end
+
+      evidence_hash
     end
 
     def execute_request

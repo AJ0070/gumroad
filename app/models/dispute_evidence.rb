@@ -25,7 +25,9 @@ class DisputeEvidence < ApplicationRecord
     :uncategorized_text,
     :cancellation_rebuttal,
     :refund_refusal_explanation,
-    :reason_for_winning
+    :reason_for_winning,
+    :license_key,
+    :license_key_activation_count
 
   timestamp_state_fields :created, :seller_contacted, :seller_submitted, :resolved
 

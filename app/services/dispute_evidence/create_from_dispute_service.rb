@@ -34,6 +34,8 @@ class DisputeEvidence::CreateFromDisputeService
     dispute_evidence.access_activity_log = DisputeEvidence::GenerateAccessActivityLogsService.perform(purchase)
     attach_receipt_image(dispute_evidence, purchase)
 
+    add_license_key_info(dispute_evidence, purchase)
+
     dispute_evidence.policy_disclosure = generate_refund_policy_disclosure(purchase, refund_policy_fine_print_view_events)
     attach_refund_policy_image(dispute_evidence, purchase, open_fine_print_modal: refund_policy_fine_print_view_events.any?)
 
@@ -129,5 +131,15 @@ class DisputeEvidence::CreateFromDisputeService
         .where("created_at < ?", purchase.created_at)
         .where(event_name: Event::NAME_PRODUCT_REFUND_POLICY_FINE_PRINT_VIEW)
         .order(id: :asc)
+    end
+
+    def add_license_key_info(dispute_evidence, purchase)
+      return unless purchase.link&.license?
+
+      license = License.find_by(purchase_id: purchase.id)
+      return unless license&.serial.present?
+
+      dispute_evidence.license_key = license.serial
+      dispute_evidence.license_key_activation_count = license.uses
     end
 end

@@ -66,6 +66,8 @@ class PaypalChargeProcessor
     case event_info["event_type"]
     when PaypalEventType::CUSTOMER_DISPUTE_CREATED
       handle_dispute_created_event(event_info)
+    when PaypalEventType::CUSTOMER_DISPUTE_UPDATED
+      handle_dispute_updated_event(event_info)
     when PaypalEventType::CUSTOMER_DISPUTE_RESOLVED
       handle_dispute_resolved_event(event_info)
     when PaypalEventType::PAYMENT_CAPTURE_COMPLETED
@@ -84,6 +86,14 @@ class PaypalChargeProcessor
     raise ChargeProcessorError, build_error_message(e.message, event_info)
   end
   private_class_method :handle_dispute_created_event
+
+  def self.handle_dispute_updated_event(event_info)
+    dispute_status = event_info.dig("resource", "status")
+    Rails.logger.info "PayPal dispute updated: #{event_info.dig('resource', 'dispute_id')} - Status: #{dispute_status}"
+  rescue StandardError => e
+    raise ChargeProcessorError, build_error_message(e.message, event_info)
+  end
+  private_class_method :handle_dispute_updated_event
 
   def self.handle_dispute_resolved_event(event_info)
     dispute_outcome = event_info["resource"]["dispute_outcome"]["outcome_code"]
@@ -733,4 +743,55 @@ class PaypalChargeProcessor
     def self.sanitize_for_paypal(string, max_length)
       string.gsub(PAYPAL_VALID_CHARACTERS_REGEX, "").to_s.strip[0...max_length]
     end
+
+  def fight_chargeback(paypal_charge_id, dispute_evidence, merchant_account: nil)
+    paypal_rest_api = PaypalRestApi.new
+    dispute_response = paypal_rest_api.get_dispute(paypal_charge_id)
+
+    unless paypal_rest_api.successful_response?(dispute_response)
+      raise ChargeProcessorInvalidRequestError, "Failed to retrieve PayPal dispute details: #{dispute_response.result&.details&.first&.description}"
+    end
+
+    dispute = dispute_response.result
+    evidence = build_paypal_dispute_evidence(dispute_evidence)
+
+    if dispute.status == "WAITING_FOR_BUYER_RESPONSE"
+      response = paypal_rest_api.appeal_dispute(paypal_charge_id, evidence)
+    else
+      response = paypal_rest_api.provide_evidence_for_dispute(paypal_charge_id, evidence)
+    end
+
+    unless paypal_rest_api.successful_response?(response)
+      error_message = response.result&.details&.first&.description || "Unknown PayPal dispute API error"
+      raise ChargeProcessorInvalidRequestError, "Failed to submit evidence for PayPal dispute: #{error_message}"
+    end
+
+    response.result
+  end
+  private
+
+  def build_paypal_dispute_evidence(dispute_evidence)
+    evidence = {}
+    evidence[:customer_email] = dispute_evidence.customer_email
+    evidence[:customer_name] = dispute_evidence.customer_name
+    evidence[:billing_address] = dispute_evidence.billing_address
+    evidence[:shipping_address] = dispute_evidence.shipping_address
+    evidence[:product_description] = dispute_evidence.product_description
+    evidence[:reason_for_winning] = dispute_evidence.reason_for_winning
+
+    if dispute_evidence.shipping_tracking_number.present?
+      evidence[:shipping_tracking_number] = dispute_evidence.shipping_tracking_number
+    end
+
+    add_license_key_info(evidence, dispute_evidence)
+
+    evidence
+  end
+
+  def add_license_key_info(evidence, dispute_evidence)
+    if dispute_evidence.license_key.present?
+      evidence[:license_key] = dispute_evidence.license_key
+      evidence[:license_key_activation_count] = dispute_evidence.license_key_activation_count
+    end
+  end
 end
