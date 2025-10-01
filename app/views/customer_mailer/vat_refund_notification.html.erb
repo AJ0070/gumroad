@@ -1,0 +1,24 @@
+<%= header_section("Automatic VAT Refund Processed") %>
+<div>
+  <p>Great news! We've processed automatic VAT refunds for your subscription to <%= @subscription.link.name %>.</p>
+  
+  <h3>Refund Summary:</h3>
+  <ul>
+    <li><strong>VAT ID:</strong> <%= @vat_id %></li>
+    <li><strong>Number of refunds processed:</strong> <%= @refund_count %></li>
+    <li><strong>Total refund amount:</strong> <%= format_money(@total_refund_amount_cents, @subscription.link.currency_type) %></li>
+  </ul>
+  
+  <p>Your VAT ID has been saved and will be applied automatically to all future subscription charges. You won't need to enter it again.</p>
+  
+  <h3>What happens next:</h3>
+  <ul>
+    <li>The refunds will appear in your account within 3-7 business days</li>
+    <li>All future subscription charges will be VAT-exempt</li>
+    <li>You'll receive a receipt for each charge showing $0.00 in VAT</li>
+  </ul>
+  
+  <p>If you have any questions about these refunds or your VAT ID, please reply to this email.</p>
+  
+  <p>Thank you for being a Gumroad customer!</p>
+</div>

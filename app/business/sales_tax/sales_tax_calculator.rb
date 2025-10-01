@@ -3,16 +3,15 @@
 require_relative "../../../lib/utilities/geo_ip"
 
 class SalesTaxCalculator
-  attr_accessor :tax_rate, :product, :price_cents, :shipping_cents, :quantity, :buyer_location, :buyer_vat_id, :state, :is_us_taxable_state, :is_ca_taxable, :is_quebec
+  attr_accessor :tax_rate, :product, :price_cents, :shipping_cents, :quantity, :buyer_location, :state, :is_us_taxable_state, :is_ca_taxable, :is_quebec
 
-  def initialize(product:, price_cents:, shipping_cents: 0, quantity: 1, buyer_location:, buyer_vat_id: nil, from_discover: false)
+  def initialize(product:, price_cents:, shipping_cents: 0, quantity: 1, buyer_location:, from_discover: false)
     @tax_rate = nil
     @product = product
     @price_cents = price_cents
     @shipping_cents = shipping_cents
     @quantity = quantity
     @buyer_location = buyer_location
-    @buyer_vat_id = buyer_vat_id
     validate
     @state = if buyer_location[:country] == Compliance::Countries::USA.alpha2
       UsZipCodes.identify_state_code(buyer_location[:postal_code])
@@ -31,8 +30,6 @@ class SalesTaxCalculator
 
     return SalesTaxCalculation.zero_tax(price_cents) if product.user.has_brazilian_stripe_connect_account?
 
-    return SalesTaxCalculation.zero_business_vat(price_cents) if is_vat_id_valid?
-
     sales_tax_calculation = calculate_with_taxjar
     return sales_tax_calculation if sales_tax_calculation
 
@@ -45,7 +42,7 @@ class SalesTaxCalculator
     SalesTaxCalculation.new(price_cents:,
                             tax_cents: tax_amount_cents,
                             zip_tax_rate: tax_rate,
-                            business_vat_status: @buyer_vat_id.present? ? :invalid : nil,
+                            business_vat_status: nil,
                             is_quebec:)
   end
 
@@ -106,7 +103,7 @@ class SalesTaxCalculator
       SalesTaxCalculation.new(price_cents:,
                               tax_cents: tax_amount_cents,
                               zip_tax_rate: nil,
-                              business_vat_status: buyer_vat_id.present? ? :invalid : nil,
+                              business_vat_status: nil,
                               used_taxjar: true,
                               taxjar_info:,
                               gumroad_is_mpf: is_us_taxable_state || is_ca_taxable,
@@ -119,38 +116,11 @@ class SalesTaxCalculator
       raise SalesTaxCalculatorValidationError, "Product should be a Link instance" unless @product.is_a? Link
     end
 
-    def is_vat_id_valid?
-      if buyer_location && Compliance::Countries::AUS.alpha2 == buyer_location[:country]
-        AbnValidationService.new(@buyer_vat_id).process
-      elsif buyer_location && Compliance::Countries::SGP.alpha2 == buyer_location[:country]
-        GstValidationService.new(@buyer_vat_id).process
-      elsif buyer_location && Compliance::Countries::CAN.alpha2 == buyer_location[:country] && state == QUEBEC
-        QstValidationService.new(@buyer_vat_id).process
-      elsif buyer_location && Compliance::Countries::NOR.alpha2 == buyer_location[:country]
-        MvaValidationService.new(@buyer_vat_id).process
-      elsif buyer_location && Compliance::Countries::KEN.alpha2 == buyer_location[:country]
-        KraPinValidationService.new(@buyer_vat_id).process
-      elsif buyer_location && Compliance::Countries::BHR.alpha2 == buyer_location[:country]
-        TrnValidationService.new(@buyer_vat_id).process
-      elsif buyer_location && Compliance::Countries::OMN.alpha2 == buyer_location[:country]
-        OmanVatNumberValidationService.new(@buyer_vat_id).process
-      elsif buyer_location && Compliance::Countries::NGA.alpha2 == buyer_location[:country]
-        FirsTinValidationService.new(@buyer_vat_id).process
-      elsif buyer_location && Compliance::Countries::TZA.alpha2 == buyer_location[:country]
-        TraTinValidationService.new(@buyer_vat_id).process
-      elsif buyer_location && (Compliance::Countries::COUNTRIES_THAT_COLLECT_TAX_ON_ALL_PRODUCTS.include?(buyer_location[:country]) ||
-            Compliance::Countries::COUNTRIES_THAT_COLLECT_TAX_ON_DIGITAL_PRODUCTS_WITH_TAX_ID_PRO_VALIDATION.include?(buyer_location[:country]))
-        TaxIdValidationService.new(@buyer_vat_id, buyer_location[:country]).process
-      else
-        VatValidationService.new(@buyer_vat_id).process
-      end
-    end
-
     # Internal: Determine the sales tax to be levied if applicable.
     #
     # product_external_id - Product's external ID , used to retrieve metadata from cache.
     # buyer_location - Buyer location information to determine tax rate.
-    def calculate_with_lookup_table
+    def determine_tax_rate
       return if tax_rate.present?
       return if product.nil?
 

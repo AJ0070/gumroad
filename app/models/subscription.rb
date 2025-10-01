@@ -936,6 +936,159 @@ class Subscription < ApplicationRecord
       end
     end
 
+    def update_vat_id!(new_vat_id)
+      return unless new_vat_id.present?
+      return if new_vat_id == current_vat_id
+
+      # Business logic validation before processing
+      eligibility_result = validate_vat_id_eligibility(new_vat_id)
+      unless eligibility_result[:eligible]
+        Rails.logger.warn "VAT ID eligibility check failed for subscription #{id}: #{eligibility_result[:reason]}"
+        return false
+      end
+
+      if validate_and_store_vat_id(new_vat_id)
+        refunds_processed = process_automatic_vat_refunds
+        Rails.logger.info "VAT ID update completed for subscription #{id}: #{refunds_processed} refunds processed"
+        refunds_processed
+      else
+        false
+      end
+    end
+
+    def current_vat_id
+      original_purchase.purchase_sales_tax_info&.business_vat_id
+    end
+
+    private
+
+    def validate_vat_id_eligibility(vat_id)
+      # Check if subscription is still active and eligible for VAT refunds
+      return { eligible: false, reason: "Subscription is not active" } unless alive?
+      return { eligible: false, reason: "Subscription is cancelled" } if cancelled?
+      return { eligible: false, reason: "Subscription has ended" } if ended?
+      
+      # Check if original purchase is eligible for VAT exemption
+      return { eligible: false, reason: "Original purchase not found" } unless original_purchase
+      return { eligible: false, reason: "Original purchase country not eligible for VAT" } unless country_eligible_for_vat?
+      
+      # Check if product type is eligible for VAT exemption
+      return { eligible: false, reason: "Product type not eligible for VAT exemption" } unless product_eligible_for_vat?
+      
+      # Check if customer is business customer (basic validation)
+      return { eligible: false, reason: "Customer type not eligible for business VAT exemption" } unless business_customer?
+      
+      { eligible: true }
+    end
+
+    def country_eligible_for_vat?
+      country_code = Compliance::Countries.find_by_name(original_purchase.country)&.alpha2
+      return false unless country_code
+      
+      # Countries that collect VAT/sales tax and allow exemptions
+      Compliance::Countries::EU_VAT_APPLICABLE_COUNTRY_CODES.include?(country_code) ||
+      Compliance::Countries::COUNTRIES_THAT_COLLECT_TAX_ON_ALL_PRODUCTS.include?(country_code) ||
+      Compliance::Countries::COUNTRIES_THAT_COLLECT_TAX_ON_DIGITAL_PRODUCTS_WITH_TAX_ID_PRO_VALIDATION.include?(country_code) ||
+      [Compliance::Countries::AUS.alpha2, Compliance::Countries::SGP.alpha2, 
+       Compliance::Countries::CAN.alpha2, Compliance::Countries::NOR.alpha2].include?(country_code)
+    end
+
+    def product_eligible_for_vat?
+      # Most digital products are eligible for VAT exemption
+      # Physical products may have different rules
+      return true unless original_purchase.link&.is_physical?
+      
+      # For physical products, check if shipping to eligible country
+      country_code = Compliance::Countries.find_by_name(original_purchase.country)&.alpha2
+      country_code && Compliance::Countries::EU_VAT_APPLICABLE_COUNTRY_CODES.include?(country_code)
+    end
+
+    def business_customer?
+      # Basic validation - could be enhanced with additional business verification
+      # For now, assume any customer providing VAT ID is a business customer
+      original_purchase.email.present? && original_purchase.email.match?(/@/)
+    end
+
+    def validate_and_store_vat_id(vat_id)
+      # Use proper public method for validation
+      temp_purchase = Purchase.new(
+        business_vat_id: vat_id,
+        country: original_purchase.country,
+        state: original_purchase.state
+      )
+      
+      is_valid = temp_purchase.vat_id_exempt?
+      
+      if is_valid
+        # Only update the original purchase if validation passes
+        original_purchase.business_vat_id = vat_id
+        original_purchase.create_sales_tax_info! unless original_purchase.purchase_sales_tax_info
+        original_purchase.save!
+      end
+
+      is_valid
+    end
+
+    def process_automatic_vat_refunds
+      # Only process purchases from the last 90 days to prevent excessive refunds
+      refund_cutoff_date = 90.days.ago
+      taxable_purchases = purchases.successful
+                                .where("created_at > ?", refund_cutoff_date)
+                                .where("gumroad_tax_cents > 0 OR tax_cents > 0")
+      
+      successful_refunds = 0
+      failed_refunds = 0
+      total_refund_amount_cents = 0
+      
+      taxable_purchases.each do |purchase|
+        # Skip if already has a VAT refund for this purchase
+        next if purchase.refunds.where("gumroad_tax_cents > 0")
+                                .where("amount_cents = 0")
+                                .where("note LIKE ?", "%Automatic VAT refund%")
+                                .exists?
+        
+        # Skip if purchase was already tax-exempt at time of purchase
+        next if purchase.was_purchase_taxable == false
+        
+        begin
+          refund = purchase.refunds.build(
+            amount_cents: 0,
+            gumroad_tax_cents: purchase.gumroad_tax_cents,
+            tax_cents: purchase.tax_cents,
+            business_vat_id: current_vat_id,
+            note: "Automatic VAT refund for #{current_vat_id}"
+          )
+          
+          if refund.valid? && refund.process!
+            successful_refunds += 1
+            total_refund_amount_cents += purchase.gumroad_tax_cents + purchase.tax_cents
+            Rails.logger.info "Automatic VAT refund processed for subscription #{id}, purchase #{purchase.id}, amount: #{purchase.gumroad_tax_cents + purchase.tax_cents} cents"
+          else
+            failed_refunds += 1
+            Rails.logger.error "Automatic VAT refund failed for subscription #{id}, purchase #{purchase.id}: #{refund.errors.full_messages.join(', ')}"
+          end
+        rescue => e
+          failed_refunds += 1
+          Rails.logger.error "Automatic VAT refund error for subscription #{id}, purchase #{purchase.id}: #{e.message}"
+        end
+      end
+      
+      # Log summary of refund processing
+      Rails.logger.info "Automatic VAT refund summary for subscription #{id}: #{successful_refunds} successful, #{failed_refunds} failed, total amount: #{total_refund_amount_cents} cents"
+      
+      # Send notification email if refunds were processed
+      if successful_refunds > 0
+        begin
+          CustomerMailer.vat_refund_notification(id, current_vat_id, successful_refunds, total_refund_amount_cents).deliver_later
+          Rails.logger.info "VAT refund notification sent for subscription #{id}"
+        rescue => e
+          Rails.logger.error "Failed to send VAT refund notification for subscription #{id}: #{e.message}"
+        end
+      end
+      
+      successful_refunds
+    end
+
     def schedule_member_cancellation_workflow_jobs
       return if alive? || !cancelled?
 

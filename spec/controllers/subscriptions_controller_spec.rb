@@ -245,5 +245,264 @@ describe SubscriptionsController do
         end
       end
     end
+
+    describe "PUT update_vat_id" do
+      before do
+        cookies.encrypted[@subscription.cookie_key] = @subscription.external_id
+      end
+
+      context "when subscription is active and eligible" do
+        let(:valid_au_vat_id) { "12345678901" } # Valid ABN format
+        let(:valid_eu_vat_id) { "DE123456789" } # Valid EU VAT format
+
+        before do
+          # Mock the validation services to return true
+          allow(AbnValidationService).to receive_message_chain(:new, :process).and_return(true)
+          allow(VatValidationService).to receive_message_chain(:new, :process).and_return(true)
+          
+          # Create a purchase with tax that should be refunded
+          @taxed_purchase = create(:purchase,
+            link: @product,
+            subscription: @subscription,
+            is_original_subscription_purchase: false,
+            created_at: 30.days.ago,
+            price_cents: 10000,
+            gumroad_tax_cents: 1000,
+            country: "AU",
+            state: nil)
+        end
+
+        it "updates the VAT ID successfully for Australian ABN" do
+          put :update_vat_id, params: { id: @subscription.external_id, vat_id: valid_au_vat_id }
+          
+          expect(response).to be_successful
+          expect(json_response["success"]).to be true
+          expect(json_response["message"]).to include("VAT ID updated successfully")
+          
+          # Verify the VAT ID was stored
+          expect(@subscription.reload.business_vat_id).to eq(valid_au_vat_id)
+        end
+
+        it "updates the VAT ID successfully for EU VAT" do
+          put :update_vat_id, params: { id: @subscription.external_id, vat_id: valid_eu_vat_id }
+          
+          expect(response).to be_successful
+          expect(json_response["success"]).to be true
+          expect(json_response["message"]).to include("VAT ID updated successfully")
+          
+          # Verify the VAT ID was stored
+          expect(@subscription.reload.business_vat_id).to eq(valid_eu_vat_id)
+        end
+
+        it "processes automatic VAT refunds for eligible purchases" do
+          expect do
+            put :update_vat_id, params: { id: @subscription.external_id, vat_id: valid_au_vat_id }
+          end.to change(Refund, :count).by(1)
+          
+          # Verify the refund was created for the tax amount
+          refund = Refund.last
+          expect(refund.purchase_id).to eq(@taxed_purchase.id)
+          expect(refund.amount_cents).to eq(1000) # The tax amount
+          expect(refund.note).to include("Automatic VAT refund")
+        end
+
+        it "does not process refunds for purchases older than 90 days" do
+          old_purchase = create(:purchase,
+            link: @product,
+            subscription: @subscription,
+            is_original_subscription_purchase: false,
+            created_at: 100.days.ago,
+            price_cents: 10000,
+            gumroad_tax_cents: 1000,
+            country: "AU",
+            state: nil)
+          
+          expect do
+            put :update_vat_id, params: { id: @subscription.external_id, vat_id: valid_au_vat_id }
+          end.to change(Refund, :count).by(1) # Only the recent purchase gets refunded
+          
+          # Verify the old purchase was not refunded
+          expect(Refund.where(purchase_id: old_purchase.id)).to be_empty
+        end
+
+        it "does not process refunds for already tax-exempt purchases" do
+          exempt_purchase = create(:purchase,
+            link: @product,
+            subscription: @subscription,
+            is_original_subscription_purchase: false,
+            created_at: 30.days.ago,
+            price_cents: 10000,
+            gumroad_tax_cents: 0, # Already exempt
+            country: "AU",
+            state: nil)
+          
+          expect do
+            put :update_vat_id, params: { id: @subscription.external_id, vat_id: valid_au_vat_id }
+          end.to change(Refund, :count).by(1) # Only the taxed purchase gets refunded
+          
+          # Verify the exempt purchase was not refunded
+          expect(Refund.where(purchase_id: exempt_purchase.id)).to be_empty
+        end
+      end
+
+      context "when VAT ID validation fails" do
+        let(:invalid_vat_id) { "INVALID" }
+
+        before do
+          # Mock the validation services to return false
+          allow(AbnValidationService).to receive_message_chain(:new, :process).and_return(false)
+          allow(VatValidationService).to receive_message_chain(:new, :process).and_return(false)
+        end
+
+        it "returns error response for invalid VAT ID" do
+          put :update_vat_id, params: { id: @subscription.external_id, vat_id: invalid_vat_id }
+          
+          expect(response).to have_http_status(:unprocessable_entity)
+          expect(json_response["success"]).to be false
+          expect(json_response["message"]).to include("Invalid VAT ID format")
+          
+          # Verify the VAT ID was not stored
+          expect(@subscription.reload.business_vat_id).to be_nil
+        end
+
+        it "does not process any refunds when validation fails" do
+          create(:purchase,
+            link: @product,
+            subscription: @subscription,
+            is_original_subscription_purchase: false,
+            created_at: 30.days.ago,
+            price_cents: 10000,
+            gumroad_tax_cents: 1000,
+            country: "AU",
+            state: nil)
+          
+          expect do
+            put :update_vat_id, params: { id: @subscription.external_id, vat_id: invalid_vat_id }
+          end.not_to change(Refund, :count)
+        end
+      end
+
+      context "when subscription is not eligible for VAT ID updates" do
+        let(:valid_vat_id) { "12345678901" }
+
+        before do
+          allow(AbnValidationService).to receive_message_chain(:new, :process).and_return(true)
+        end
+
+        context "when subscription is cancelled" do
+          before do
+            @subscription.update!(cancelled_at: Time.current)
+          end
+
+          it "returns error response" do
+            put :update_vat_id, params: { id: @subscription.external_id, vat_id: valid_vat_id }
+            
+            expect(response).to have_http_status(:unprocessable_entity)
+            expect(json_response["success"]).to be false
+            expect(json_response["message"]).to include("not eligible")
+          end
+        end
+
+        context "when subscription has ended" do
+          before do
+            @subscription.update!(end_time_of_subscription: 1.day.ago)
+          end
+
+          it "returns error response" do
+            put :update_vat_id, params: { id: @subscription.external_id, vat_id: valid_vat_id }
+            
+            expect(response).to have_http_status(:unprocessable_entity)
+            expect(json_response["success"]).to be false
+            expect(json_response["message"]).to include("not eligible")
+          end
+        end
+
+        context "when subscription is for a non-taxable product" do
+          before do
+            @product.update!(is_physical: true) # Physical products don't have VAT
+          end
+
+          it "returns error response" do
+            put :update_vat_id, params: { id: @subscription.external_id, vat_id: valid_vat_id }
+            
+            expect(response).to have_http_status(:unprocessable_entity)
+            expect(json_response["success"]).to be false
+            expect(json_response["message"]).to include("not eligible")
+          end
+        end
+      end
+
+      context "when country is not eligible for VAT exemption" do
+        let(:valid_vat_id) { "12345678901" }
+
+        before do
+          # Create a purchase from a non-VAT country
+          @purchase.update!(country: "US") # US doesn't have VAT
+          allow(AbnValidationService).to receive_message_chain(:new, :process).and_return(true)
+        end
+
+        it "returns error response" do
+          put :update_vat_id, params: { id: @subscription.external_id, vat_id: valid_vat_id }
+          
+          expect(response).to have_http_status(:unprocessable_entity)
+          expect(json_response["success"]).to be false
+          expect(json_response["message"]).to include("not eligible")
+        end
+      end
+
+      context "when duplicate refund prevention is triggered" do
+        let(:valid_vat_id) { "12345678901" }
+
+        before do
+          allow(AbnValidationService).to receive_message_chain(:new, :process).and_return(true)
+          
+          # Create a purchase with tax
+          @taxed_purchase = create(:purchase,
+            link: @product,
+            subscription: @subscription,
+            is_original_subscription_purchase: false,
+            created_at: 30.days.ago,
+            price_cents: 10000,
+            gumroad_tax_cents: 1000,
+            country: "AU",
+            state: nil)
+          
+          # Create an existing refund with the same note
+          create(:refund,
+            purchase: @taxed_purchase,
+            amount_cents: 1000,
+            note: "Automatic VAT refund for ABN: #{valid_vat_id}")
+        end
+
+        it "does not create duplicate refunds" do
+          expect do
+            put :update_vat_id, params: { id: @subscription.external_id, vat_id: valid_vat_id }
+          end.not_to change(Refund, :count)
+          
+          # Still returns success since the VAT ID was updated
+          expect(response).to be_successful
+          expect(json_response["success"]).to be true
+        end
+      end
+
+      context "error handling" do
+        let(:valid_vat_id) { "12345678901" }
+
+        before do
+          allow(AbnValidationService).to receive_message_chain(:new, :process).and_return(true)
+        end
+
+        it "handles unexpected errors gracefully" do
+          # Mock the update_vat_id! method to raise an exception
+          allow(@subscription).to receive(:update_vat_id!).and_raise(StandardError.new("Unexpected error"))
+          
+          put :update_vat_id, params: { id: @subscription.external_id, vat_id: valid_vat_id }
+          
+          expect(response).to have_http_status(:unprocessable_entity)
+          expect(json_response["success"]).to be false
+          expect(json_response["message"]).to include("An error occurred")
+        end
+      end
+    end
   end
 end

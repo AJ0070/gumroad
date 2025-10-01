@@ -99,3 +99,37 @@ type UpdateSubscriptionResponse =
       client_secret: string;
       purchase: { id: string; stripe_connect_account_id: string | null };
     };
+
+export const updateSubscriptionVatId = async (
+  subscriptionId: string,
+  vatId: string,
+): Promise<
+  | { type: "success"; message: string; refunds_processed?: number; country?: string }
+  | { type: "error"; message: string; details?: string }
+> => {
+  const response = await request({
+    url: Routes.update_vat_id_subscription_path(subscriptionId),
+    method: "POST",
+    accept: "json",
+    data: { vat_id: vatId },
+  });
+
+  if (response.ok) {
+    const responseData = cast<{ success: boolean; message?: string; error?: string; details?: string; refunds_processed?: number; country?: string }>(await response.json());
+    if (responseData.success) {
+      return {
+        type: "success",
+        message: responseData.message || "VAT ID updated successfully",
+        refunds_processed: responseData.refunds_processed,
+        country: responseData.country,
+      };
+    } else {
+      return {
+        type: "error",
+        message: responseData.error || "Failed to update VAT ID",
+        details: responseData.details,
+      };
+    }
+  }
+  return { type: "error", message: "Sorry, something went wrong." };
+};

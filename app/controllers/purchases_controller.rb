@@ -279,43 +279,11 @@ class PurchasesController < ApplicationController
     additional_notes = params[:additional_notes]&.strip
 
     raw_vat_id = params["vat_id"].present? ? params["vat_id"] : nil
+    business_vat_id = nil
+    
     if raw_vat_id
-      if @chargeable.purchase_sales_tax_info.present? &&
-         @chargeable.purchase_sales_tax_info.country_code == Compliance::Countries::AUS.alpha2
-        business_vat_id = AbnValidationService.new(raw_vat_id).process ? raw_vat_id : nil
-      elsif @chargeable.purchase_sales_tax_info.present? &&
-            @chargeable.purchase_sales_tax_info.country_code == Compliance::Countries::SGP.alpha2
-        business_vat_id = GstValidationService.new(raw_vat_id).process ? raw_vat_id : nil
-      elsif @chargeable.purchase_sales_tax_info.present? &&
-            @chargeable.purchase_sales_tax_info.country_code == Compliance::Countries::CAN.alpha2 &&
-            @chargeable.purchase_sales_tax_info.state_code == QUEBEC
-        business_vat_id = QstValidationService.new(raw_vat_id).process ? raw_vat_id : nil
-      elsif @chargeable.purchase_sales_tax_info.present? &&
-            @chargeable.purchase_sales_tax_info.country_code == Compliance::Countries::NOR.alpha2
-        business_vat_id = MvaValidationService.new(raw_vat_id).process ? raw_vat_id : nil
-      elsif @chargeable.purchase_sales_tax_info.present? &&
-            @chargeable.purchase_sales_tax_info.country_code == Compliance::Countries::BHR.alpha2
-        business_vat_id = TrnValidationService.new(raw_vat_id).process ? raw_vat_id : nil
-      elsif @chargeable.purchase_sales_tax_info.present? &&
-            @chargeable.purchase_sales_tax_info.country_code == Compliance::Countries::KEN.alpha2
-        business_vat_id = KraPinValidationService.new(raw_vat_id).process ? raw_vat_id : nil
-
-      elsif @chargeable.purchase_sales_tax_info.present? &&
-            @chargeable.purchase_sales_tax_info.country_code == Compliance::Countries::NGA.alpha2
-        business_vat_id = FirsTinValidationService.new(raw_vat_id).process ? raw_vat_id : nil
-      elsif @chargeable.purchase_sales_tax_info.present? &&
-            @chargeable.purchase_sales_tax_info.country_code == Compliance::Countries::TZA.alpha2
-        business_vat_id = TraTinValidationService.new(raw_vat_id).process ? raw_vat_id : nil
-      elsif @chargeable.purchase_sales_tax_info.present? &&
-            @chargeable.purchase_sales_tax_info.country_code == Compliance::Countries::OMN.alpha2
-        business_vat_id = OmanVatNumberValidationService.new(raw_vat_id).process ? raw_vat_id : nil
-      elsif @chargeable.purchase_sales_tax_info.present? &&
-            (Compliance::Countries::COUNTRIES_THAT_COLLECT_TAX_ON_ALL_PRODUCTS.include?(@chargeable.purchase_sales_tax_info.country_code) ||
-            Compliance::Countries::COUNTRIES_THAT_COLLECT_TAX_ON_DIGITAL_PRODUCTS_WITH_TAX_ID_PRO_VALIDATION.include?(@chargeable.purchase_sales_tax_info.country_code))
-        business_vat_id = TaxIdValidationService.new(raw_vat_id, @chargeable.purchase_sales_tax_info.country_code).process ? raw_vat_id : nil
-      else
-        business_vat_id = VatValidationService.new(raw_vat_id).process ? raw_vat_id : nil
-      end
+      # Use centralized VAT ID validation logic
+      business_vat_id = validate_vat_id_for_invoice(raw_vat_id, @chargeable)
     end
 
     invoice_presenter = InvoicePresenter.new(@chargeable, address_fields:, additional_notes:, business_vat_id:)
@@ -554,4 +522,18 @@ class PurchasesController < ApplicationController
 
       redirect_to confirm_generate_invoice_path(@purchase.external_id)
     end
+
+    private
+      def validate_vat_id_for_invoice(vat_id, chargeable)
+        return nil unless vat_id.present?
+        return nil unless chargeable.purchase_sales_tax_info.present?
+        
+        temp_purchase = Purchase.new(
+          business_vat_id: vat_id,
+          country: ISO3166::Country[chargeable.purchase_sales_tax_info.country_code]&.common_name,
+          state: chargeable.purchase_sales_tax_info.state_code
+        )
+        
+        temp_purchase.vat_id_exempt? ? vat_id : nil
+      end
 end

@@ -3,7 +3,7 @@ import * as React from "react";
 import { createCast } from "ts-safe-cast";
 
 import { confirmLineItem } from "$app/data/purchase";
-import { cancelSubscriptionByUser, updateSubscription } from "$app/data/subscription";
+import { cancelSubscriptionByUser, updateSubscription, updateSubscriptionVatId } from "$app/data/subscription";
 import { SavedCreditCard } from "$app/parsers/card";
 import { Discount } from "$app/parsers/checkout";
 import { CustomFieldDescriptor, ProductNativeType } from "$app/parsers/product";
@@ -39,6 +39,35 @@ import { showAlert } from "$app/components/server-components/Alert";
 import { useOriginalLocation } from "$app/components/useOriginalLocation";
 
 import { useOnChangeSync } from "../useOnChange";
+
+const getVatLabelForCountry = (country: string): string => {
+  switch (country) {
+    case "AE":
+    case "BH":
+      return "Business TRN ID (optional)";
+    case "AU":
+      return "Business ABN ID (optional)";
+    case "SG":
+      return "Business GST ID (optional)";
+    case "CA":
+      return "Business QST ID (optional)";
+    case "NO":
+      return "Business MVA ID (optional)";
+    case "KE":
+      return "Business KRA PIN (optional)";
+    case "NG":
+      return "Business FIRS TIN (optional)";
+    case "TZ":
+      return "Business TRA TIN (optional)";
+    case "OM":
+      return "Business VAT ID (optional)";
+    default:
+      if (["AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "EL", "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE"].includes(country)) {
+        return "Business VAT ID (optional)";
+      }
+      return "Business Tax ID (optional)";
+  }
+};
 
 type Props = {
   product: {
@@ -78,6 +107,7 @@ type Props = {
     is_overdue_for_charge: boolean;
     is_gift: boolean;
     is_installment_plan: boolean;
+    current_vat_id: string | null;
   };
   contact_info: {
     email: string;
@@ -299,6 +329,10 @@ const SubscriptionManager = ({
   }, [state.status.type]);
 
   const [cancellationStatus, setCancellationStatus] = React.useState<"initial" | "processing" | "done">("initial");
+  const [vatId, setVatId] = React.useState("");
+  const [vatIdStatus, setVatIdStatus] = React.useState<"initial" | "updating" | "success" | "error">("initial");
+  const [vatIdMessage, setVatIdMessage] = React.useState("");
+  const [currentVatId, setCurrentVatId] = React.useState<string | null>(subscription.current_vat_id);
   const handleCancel = asyncVoid(async () => {
     if (cancellationStatus === "processing" || cancellationStatus === "done") return;
     setCancellationStatus("processing");
@@ -310,6 +344,35 @@ const SubscriptionManager = ({
       assertResponseError(e);
       setCancellationStatus("initial");
       showAlert("Sorry, something went wrong.", "error");
+    }
+  });
+
+  const handleUpdateVatId = asyncVoid(async () => {
+    if (vatIdStatus === "updating") return;
+    setVatIdStatus("updating");
+    setVatIdMessage("");
+    try {
+      const result = await updateSubscriptionVatId(subscription.id, vatId);
+      if (result.type === "success") {
+        setVatIdStatus("success");
+        setCurrentVatId(vatId);
+        setVatId(result.message);
+        if (result.refunds_processed && result.refunds_processed > 0) {
+          setVatIdMessage(`${result.message} ${result.refunds_processed} refund(s) processed.`);
+        } else {
+          setVatIdMessage(result.message);
+        }
+        showAlert(result.message, "success");
+      } else {
+        setVatIdStatus("error");
+        setVatIdMessage(result.message);
+        showAlert(result.message, "error");
+      }
+    } catch (e) {
+      assertResponseError(e);
+      setVatIdStatus("error");
+      setVatIdMessage("Sorry, something went wrong updating your VAT ID.");
+      showAlert("Sorry, something went wrong updating your VAT ID.", "error");
     }
   });
 
@@ -383,6 +446,45 @@ const SubscriptionManager = ({
           </Button>
         </div>
       ) : null}
+
+      {/* VAT ID Management Section */}
+      <div className="stack input-group" style={{ marginTop: "2rem", paddingTop: "2rem", borderTop: "1px solid var(--border-color)" }}>
+        <h3>Tax Information</h3>
+        <div className="paragraphs">
+          <p>
+            If you have a business VAT ID, you can add it here to potentially qualify for tax exemption on future charges.
+            {currentVatId ? " Your current VAT ID is on file." : ""}
+          </p>
+        </div>
+        <div style={{ display: "grid", gap: "1rem" }}>
+          <div>
+            <label htmlFor="vatId">Business VAT ID</label>
+            <input
+              id="vatId"
+              type="text"
+              placeholder={getVatLabelForCountry(contact_info.country)}
+              value={vatId}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setVatId(e.target.value)}
+              disabled={vatIdStatus === "updating"}
+              className={vatIdStatus === "error" ? "danger" : ""}
+            />
+          </div>
+          <div>
+            <Button
+              onClick={handleUpdateVatId}
+              disabled={vatIdStatus === "updating" || !vatId.trim()}
+              color={vatIdStatus === "success" ? "success" : "primary"}
+            >
+              {vatIdStatus === "updating" ? "Updating..." : currentVatId ? "Update VAT ID" : "Add VAT ID"}
+            </Button>
+          </div>
+          {vatIdMessage && (
+            <div className={`text-${vatIdStatus === "success" ? "success" : "error"}`}>
+              {vatIdMessage}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 };

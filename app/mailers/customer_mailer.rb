@@ -233,26 +233,26 @@ class CustomerMailer < ApplicationMailer
     @purchase = Call.find(call_id).purchase
     @subject = "Your scheduled call with #{@purchase.seller.display_name} is tomorrow!"
     @item_info = ReceiptPresenter::ItemInfo.new(@purchase)
-    mail(to: @purchase.email, subject: @subject)
   end
 
-  def files_ready_for_download(purchase_id)
-    @purchase = Purchase.find(purchase_id)
-    @product = @purchase.link
-    @url_redirect = @purchase.url_redirect
+  def vat_refund_notification(subscription_id, vat_id, refund_count, total_refund_amount_cents)
+    @subscription = Subscription.find(subscription_id)
+    @vat_id = vat_id
+    @refund_count = refund_count
+    @total_refund_amount_cents = total_refund_amount_cents
+    @email_name = __method__
 
     mail(
-      to: @purchase.email,
-      from: from_email_address_with_name(@product.user.name, "noreply@#{CUSTOMERS_MAIL_DOMAIN}"),
-      reply_to: @product.support_email_or_default,
-      subject: "Your files are ready for download!",
-      delivery_method_options: MailerInfo.random_delivery_method_options(domain: :customers, seller: @product.user)
+      to: @subscription.user.email,
+      from: from_email_address_with_name("Gumroad", "noreply@#{CUSTOMERS_MAIL_DOMAIN}"),
+      subject: "Automatic VAT Refund Processed for Your Subscription",
+      delivery_method_options: MailerInfo.random_delivery_method_options(domain: :customers)
     )
   end
 
   private
     def receipt_for_gift_receiver?(chargeable)
-      chargeable.orderable.receipt_for_gift_receiver?
+{{ ... }}
     rescue NotImplementedError
       false
     end

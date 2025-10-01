@@ -217,6 +217,7 @@ class CheckoutPresenter
         is_overdue_for_charge: subscription.overdue_for_charge?,
         is_gift: subscription.gift?,
         is_installment_plan: subscription.is_installment_plan,
+        current_vat_id: subscription.current_vat_id,
       }
     }
   end
