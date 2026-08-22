@@ -240,6 +240,7 @@ describe CustomersController, :vcr, type: :controller, inertia: true do
       let(:product) { create(:product, user: seller, name: "Product 1", price_cents: 100, is_licensed: true) }
       let(:physical_product) { create(:physical_product, user: seller, name: "Physical product") }
       let(:membership_product) { create(:membership_product, user: seller, name: "Membership") }
+      let(:installment_plan_product) { create(:product, :with_installment_plan, user: seller, name: "Installment plan product") }
 
       before do
         # Rails renders a single-owner preload as `WHERE x = <id>`, the same shape as the per-row
@@ -256,11 +257,16 @@ describe CustomersController, :vcr, type: :controller, inertia: true do
           create(:shipment, purchase: physical_purchase)
         end
         3.times { create(:membership_purchase, seller:, link: membership_product) }
+        # Subscription#recurrence takes the installment-plan branch for these, reading the payment
+        # option's snapshot rather than its price.
+        3.times { create(:installment_plan_purchase, seller:, link: installment_plan_product) }
+        # cents_refundable reads amount_refunded_cents, which SUMs refunds per row unless preloaded.
+        purchases.first(2).each { create(:refund, purchase: _1, amount_cents: 50) }
 
         index_model_records(Purchase)
       end
 
-      it "does not issue per-purchase custom field, license, subscription or shipment queries" do
+      it "does not issue per-row association queries for the data every Sales row renders" do
         # Pre-warm feature flags, the policy's team membership lookup and AR column caches,
         # none of which repeat per row.
         get :paged, params: { page: 1 }
@@ -279,7 +285,7 @@ describe CustomersController, :vcr, type: :controller, inertia: true do
 
         expect(response).to be_successful
         # Guards every assertion below, which pass vacuously on a short page.
-        expect(response.parsed_body["customers"].size).to eq(12)
+        expect(response.parsed_body["customers"].size).to eq(15)
 
         # A batched preload reads `... IN (...)`. A bare `= <id>` is the per-row shape
         # CustomerPresenter#customer triggers for an association load_sales does not preload.
@@ -288,6 +294,13 @@ describe CustomersController, :vcr, type: :controller, inertia: true do
           "license" => /FROM `licenses`.*`licenses`\.`purchase_id` = \d+/m,
           "subscription" => /FROM `subscriptions`.*`subscriptions`\.`id` = \d+/m,
           "shipment" => /FROM `shipments`.*`shipments`\.`purchase_id` = \d+/m,
+          "payment option" => /FROM `payment_options`.*`payment_options`\.`id` = \d+/m,
+          "installment plan snapshot" => /FROM `installment_plan_snapshots`.*`payment_option_id` = \d+/m,
+          "refund sum" => /SUM\(`refunds`\.`amount_cents`\).*`refunds`\.`purchase_id` = \d+/m,
+          # Scoped to the flags-filtered original_purchase shape on purpose. The COUNT from
+          # remaining_charges_count and the ORDER BY from pending_failure? are known residuals
+          # that no preload fixes, and they hit the same table.
+          "subscription original purchase" => /SELECT `purchases`\.\* FROM `purchases` WHERE `purchases`\.`subscription_id` = \d+ AND \(\(`purchases`\.`flags`/m,
         }.each do |label, per_row_pattern|
           per_row = queries.grep(per_row_pattern)
           expect(per_row).to be_empty,

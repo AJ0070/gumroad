@@ -172,6 +172,9 @@ class CustomersController < Sellers::BaseController
           :preorder,
           :price,
           :purchaser,
+          # Lets Purchase#amount_refunded_cents take its in-memory Refund#effective?
+          # branch. Unpreloaded it runs a per-row SUM for cents_refundable.
+          :refunds,
           :seller,
           :shipment,
           :tip,
@@ -184,9 +187,17 @@ class CustomersController < Sellers::BaseController
           purchase_custom_fields: { files_attachments: :blob },
           purchase_offer_code_discount: :offer_code,
           # original_product_review resolves through Subscription#true_original_purchase to a
-          # different Purchase instance, so the top-level product_review preload never applies
-          # to membership rows.
-          subscription: { true_original_purchase: { product_review: [:response, { alive_videos: [:video_file] }] } },
+          # different Purchase instance, so the top-level product_review preload never applies to
+          # membership rows. :original_purchase is a separate association cache that
+          # true_original_purchase does not fill, and current_subscription_price_cents reads it on
+          # every branch.
+          subscription: [
+            :original_purchase,
+            {
+              last_payment_option: [:price, :installment_plan, :installment_plan_snapshot],
+              true_original_purchase: { product_review: [:response, { alive_videos: [:video_file] }] }
+            }
+          ],
           upsell_purchase: :upsell,
           utm_link: [target_resource: [:seller, :user]]
         )
