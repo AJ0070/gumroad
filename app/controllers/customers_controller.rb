@@ -166,13 +166,28 @@ class CustomersController < Sellers::BaseController
       sales.records
         .includes(
           :call,
-          :purchase_offer_code_discount,
+          :license,
+          :merchant_account,
+          :offer_code,
+          :preorder,
+          :price,
+          :purchaser,
+          :seller,
+          :shipment,
           :tip,
-          :upsell_purchase,
-          :variant_attributes,
           :url_redirect,
-          :link,
+          :variant_attributes,
+          affiliate: :affiliate_user,
+          commission_as_deposit: [:completion_purchase, { files_attachments: :blob }],
+          link: :alive_variants,
           product_review: [:response, { alive_videos: [:video_file] }],
+          purchase_custom_fields: { files_attachments: :blob },
+          purchase_offer_code_discount: :offer_code,
+          # original_product_review resolves through Subscription#true_original_purchase to a
+          # different Purchase instance, so the top-level product_review preload never applies
+          # to membership rows.
+          subscription: { true_original_purchase: { product_review: [:response, { alive_videos: [:video_file] }] } },
+          upsell_purchase: :upsell,
           utm_link: [target_resource: [:seller, :user]]
         )
         .in_order_of(:id, sales.records.ids)
